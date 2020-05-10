@@ -4,6 +4,8 @@ download/
 test/
 dataset_coco.json
 
+train_sm.py
+
 *.zip
 *.sh
 

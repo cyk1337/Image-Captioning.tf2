@@ -35,18 +35,15 @@ def img_cap_flags():
     flags.DEFINE_boolean("reset_cache", False, "Delete processed file if exists")
     flags.DEFINE_boolean('enable_function', True, 'Enable Function?')
 
-    flags.DEFINE_boolean("debug", True, "DEBUG")
-
-    # devices
-    flags.DEFINE_string("CUDA_VISIBLE_DEVICES", '0,1', 'specified gpu num for training')
+    flags.DEFINE_boolean("debug", False, "DEBUG")
 
     # model settings
-    flags.DEFINE_enum('model_name', 'ShowAttendTell', ['ShowAttendTell'], 'Model name')
+    flags.DEFINE_string('model_name', 'ShowAttendTell', 'Model name')
     flags.DEFINE_string('cnn_type', 'inception_v3', 'CNN encoder type: ')
     flags.DEFINE_integer('feat_shape', 2048, 'Feature shape')
     flags.DEFINE_boolean("use_pretrained_embed", False, "Whether to use pretrained embeddings")
     flags.DEFINE_string('embed_path', None, 'Pre-trained embedding path')
-    flags.DEFINE_enum('optim_name', 'Adam', ['Adam', 'RMSProp', 'SGD'], 'Optimizer')
+    flags.DEFINE_string('optim_name', 'Adam', 'Optimizer')
 
     flags.DEFINE_boolean("do_train", True, "Train mode")
     flags.DEFINE_boolean("do_test", True, "Inference on the test set")
@@ -55,11 +52,11 @@ def img_cap_flags():
 
     # hyper-params
     flags.DEFINE_integer("max_seq_len", 30, "Max sequence length for each inputs")
-    flags.DEFINE_integer("train_bsz", 20, "Batch size in the train mode")
-    flags.DEFINE_integer("val_bsz", 100, "Batch size in the eval mode")
-    flags.DEFINE_integer("test_bsz", 1000, "Batch size in the test mode")
+    flags.DEFINE_integer("train_bsz", 512, "Batch size in the train mode")
+    flags.DEFINE_integer("val_bsz", 512, "Batch size in the eval mode")
+    flags.DEFINE_integer("test_bsz", 512, "Batch size in the test mode")
     flags.DEFINE_integer("max_num_words", None, "Maximum vocabulary size")
-    flags.DEFINE_integer("embed_dim", 256, "Embedding dim")
+    flags.DEFINE_integer("embed_dim", 300, "Embedding dim")
     flags.DEFINE_integer("h_dim", 512, "Attn_dim")
 
     flags.DEFINE_float("dropout_rate", .2, "Dropout_rate")
@@ -69,6 +66,9 @@ def img_cap_flags():
     flags.DEFINE_integer("num_epochs", 100, "Epochs to train")
     flags.DEFINE_integer("tol", 30, "Tolerance for early stopping")
     flags.DEFINE_integer("val_every", 200, "Every K epoch to evaluate once on eval set")
+
+    # devices
+    flags.DEFINE_string("CUDA_VISIBLE_DEVICES", '0', 'specified gpu num for training')
 
     # model storage
     flags.DEFINE_boolean("save_models", True, "Whether to save models")
@@ -128,14 +128,14 @@ def load_test_data(dataset, raw_data_path, cnn_type, reset_cache, max_seq_len, t
     return test_data, vocab_dict, data_loader.idx_word
 
 
-def create_model(model_name, model_config, optimizer, strategy):
+def create_model(model_name, model_config, optimizer):
     model_collections = {
-        'ShowAttendTell': DistributedShowAttendTell,
+        'ShowAttendTell': ShowAttendTell,
     }
     if model_name not in model_collections:
         raise ValueError(f"Invalid model_name {model_name}!")
     model = model_collections[model_name]
-    model = model(model_config, optimizer, strategy)
+    model = model(model_config, optimizer)
     logging.info(f"{'>' * 30} run model: \x1b[1;33;m\t{model_name}\t \x1b[0m {'>' * 30}")
     return model
 
@@ -191,9 +191,6 @@ def main(argv):
     if not any([FLAGS.do_train, FLAGS.do_test, FLAGS.do_predict]):
         raise ValueError(f"At least one mode is set to be true.")
 
-    strategy = tf.distribute.MirroredStrategy()
-    # num_replicas = strategy.num_replicas_in_sync
-
     print_configuration_op(FLAGS)
     reset_seed(FLAGS.random_seed)
 
@@ -211,64 +208,58 @@ def main(argv):
                                                                 val_bsz=FLAGS.val_bsz,
                                                                 debug=FLAGS.debug)
 
-    train_data_dist = strategy.experimental_distribute_dataset(train_data)
-    val_data_dist = strategy.experimental_distribute_dataset(val_data)
-    # train_iterator = strategy.make_dataset_iterator(train_data)
-    # val_iterator = strategy.make_dataset_iterator(val_data)
+    if FLAGS.max_num_words is not None:
+        vocab_size = max(FLAGS.max_num_words, len(vocab_dict))
+    else:
+        vocab_size = len(vocab_dict)
+    logging.info(f"vocabulary size: {vocab_size}")
 
-    with strategy.scope():
-        if FLAGS.max_num_words is not None:
-            vocab_size = max(FLAGS.max_num_words, len(vocab_dict))
-        else:
-            vocab_size = len(vocab_dict)
-        logging.info(f"vocabulary size: {vocab_size}")
+    # output dir
+    # ==============================
+    hyperparams_to_tune = {
+        'cap_len': FLAGS.max_seq_len,
+        'lr': FLAGS.lr,
+        # 'drpt': FLAGS.dropout_rate,
+    }
+    model_repr = '_'.join([f"{k}{v}" for k, v in hyperparams_to_tune.items()])
+    # save_dir = os.path.join(output_dir, model_repr)
+    save_dir = os.path.join(output_dir, model_repr, datetime.now().strftime("%Y-%m-%d-%H-%M-%S"))
+    log_file = os.path.join(save_dir, f'{datetime.now().strftime("%Y-%m-%d-%H-%M-%S")}.log')
+    os.makedirs(save_dir, exist_ok=True)
 
-        # output dir
-        # ==============================
-        hyperparams_to_tune = {
-            'cap_len': FLAGS.max_seq_len,
-            'lr': FLAGS.lr,
-            # 'drpt': FLAGS.dropout_rate,
-        }
-        model_repr = '_'.join([f"{k}{v}" for k, v in hyperparams_to_tune.items()])
-        # save_dir = os.path.join(output_dir, model_repr)
-        if FLAGS.debug:
-            save_dir = os.path.join(output_dir, model_repr, 'debug/')
-        else:
-            save_dir = os.path.join(output_dir, model_repr, datetime.now().strftime("%Y-%m-%d-%H-%M-%S"))
-        log_file = os.path.join(save_dir, f'{datetime.now().strftime("%Y-%m-%d-%H-%M-%S")}.log')
-        os.makedirs(save_dir, exist_ok=True)
+    # load model_config
+    # ===============================
+    model_config = create_model_config(FLAGS.model_name, vocab_size, vocab_dict, idx_word, FLAGS.num_epochs, model_repr)
 
-        # load model_config
-        # ===============================
-        model_config = create_model_config(FLAGS.model_name, vocab_size, vocab_dict, idx_word, FLAGS.num_epochs,
-                                           model_repr)
+    # optimizer
+    # ==============================
+    optimizer = create_optimizer(optim_name=FLAGS.optim_name, lr=FLAGS.lr,
+                                 clipnorm=FLAGS.clipnorm if FLAGS.do_clip else None)
 
-        # optimizer
-        # ==============================
-        optimizer = create_optimizer(optim_name=FLAGS.optim_name, lr=FLAGS.lr,
-                                     clipnorm=FLAGS.clipnorm if FLAGS.do_clip else None)
+    # model
+    # ==============================
+    model = create_model(FLAGS.model_name, model_config, optimizer)
+    ckpt_dir = os.path.join(save_dir, f'best-model-{model_repr}')
+    # train
+    if FLAGS.do_train:
+        model.train_loop(train_data, val_data, FLAGS, ckpt_dir, log_file)
 
-        # model
-        # ==============================
-        model = create_model(FLAGS.model_name, model_config, optimizer, strategy)
-        ckpt_dir = os.path.join(save_dir, f'best-model-{model_repr}')
-        # train
-        if FLAGS.do_train:
-            # model.train_loop(train_data, val_data, FLAGS, ckpt_dir, log_file)
-            model.train_loop(train_data_dist, val_data_dist, FLAGS, ckpt_dir, log_file)
+    if FLAGS.do_test:
+        test_data, vocab_dict, idx_word = load_test_data(dataset=FLAGS.dataset,
+                                                         raw_data_path=FLAGS.raw_data_path,
+                                                         cnn_type=FLAGS.cnn_type,
+                                                         reset_cache=FLAGS.reset_cache,
+                                                         max_seq_len=FLAGS.max_seq_len + 1,
+                                                         test_bsz=FLAGS.test_bsz,
+                                                         debug=FLAGS.debug)
+        test_log_path = os.path.join(save_dir, 'test.log')
+        model.inference(test_data, ckpt_dir, test_log_path)
 
-        if FLAGS.do_test:
-            test_data, vocab_dict, idx_word = load_test_data(dataset=FLAGS.dataset,
-                                                             raw_data_path=FLAGS.raw_data_path,
-                                                             cnn_type=FLAGS.cnn_type,
-                                                             reset_cache=FLAGS.reset_cache,
-                                                             max_seq_len=FLAGS.max_seq_len + 1,
-                                                             test_bsz=FLAGS.test_bsz,
-                                                             debug=FLAGS.debug)
-            test_data_dist = strategy.experimental_distribute_dataset(test_data)
-            test_log_path = os.path.join(save_dir, 'test.log')
-            model.inference(test_data_dist, ckpt_dir, test_log_path)
+        # plt.plot(loss_plot)
+        # plt.xlabel('Epochs')
+        # plt.ylabel('Loss')
+        # plt.title('Loss Plot')
+        # plt.show()
 
 
 if __name__ == '__main__':
