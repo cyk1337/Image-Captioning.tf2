@@ -344,7 +344,7 @@ class DistributeTrain(TrainTemplate):
                           f"\n {eval_scores} \x1b[0m")
 
                     # early stopping
-                    if m_val_loss < best_val_loss:
+                    if m_val_loss < best_val_loss or any([eval_scores[k] > best_scores[k] for k in eval_scores]):
                         best_val_loss = m_val_loss
                         best_step = cur_step
                         for k in eval_scores:
@@ -363,7 +363,7 @@ class DistributeTrain(TrainTemplate):
                             logging.info(
                                 f"\x1b[1;34;m \t Early stopping at step {best_step}, "
                                 f"best_val_loss= {best_val_loss:8.4f}, "
-                                f"best_scores={best_scores:8.4f} \x1b[0m")
+                                f"best_scores={best_scores} \x1b[0m")
                             # save log
                             save_log(log_file + '/test_results.txt',
                                      {'model': self.model_config.model_repr,
