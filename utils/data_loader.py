@@ -192,7 +192,8 @@ class BaseLoader(object):
             lambda item0, item1, item2: tf.numpy_function(self.map_func, [item0, item1, item2],
                                                           [tf.int32, tf.float32, tf.int32]),
             num_parallel_calls=tf.data.experimental.AUTOTUNE)
-        dataset = dataset.map(lambda ids, img, cap: self.set_shapes(ids, img, cap, img_ids.shape[1:], (None, None), caps.shape[1:]))
+        dataset = dataset.map(
+            lambda ids, img, cap: self.set_shapes(ids, img, cap, img_ids.shape[1:], (None, None), caps.shape[1:]))
         if shuffle:
             dataset = dataset.shuffle(buffer_size=buffer_size, seed=seed).batch(bsz)
         dataset = dataset.prefetch(buffer_size=tf.data.experimental.AUTOTUNE)

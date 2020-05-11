@@ -55,9 +55,9 @@ def img_cap_flags():
 
     # hyper-params
     flags.DEFINE_integer("max_seq_len", 30, "Max sequence length for each inputs")
-    flags.DEFINE_integer("train_bsz", 100, "Batch size in the train mode")
-    flags.DEFINE_integer("val_bsz", 100, "Batch size in the eval mode")
-    flags.DEFINE_integer("test_bsz", 100, "Batch size in the test mode")
+    flags.DEFINE_integer("train_bsz", 1024, "Batch size in the train mode")
+    flags.DEFINE_integer("val_bsz", 1000, "Batch size in the eval mode")
+    flags.DEFINE_integer("test_bsz", 1000, "Batch size in the test mode")
     flags.DEFINE_integer("max_num_words", None, "Maximum vocabulary size")
     flags.DEFINE_integer("embed_dim", 256, "Embedding dim")
     flags.DEFINE_integer("h_dim", 512, "Attn_dim")
