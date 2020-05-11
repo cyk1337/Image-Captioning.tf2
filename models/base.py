@@ -124,7 +124,7 @@ class TrainTemplate(object):
 
                 cur_step += 1
                 if (batch + 1) % FLAGS.print_every == 0:
-                    print(f'Epoch {epoch + 1:04} Batch {batch + 1:8} Loss {loss.numpy() / int(cap.shape[1]):8.4f}')
+                    print(f'Epoch {epoch + 1:04} | Batch {batch + 1} | Loss {loss.numpy() / int(cap.shape[1]):7.4f}')
 
                 # evaluate
                 if FLAGS.debug or cur_step % FLAGS.val_every == 0:
@@ -173,7 +173,7 @@ class TrainTemplate(object):
                                       'best_scores': best_scores})
                             return
 
-            print(f'Epoch {epoch + 1} Loss {self.train_loss_metric.result().numpy():.6f}')
+            print(f'Epoch {epoch + 1} | Loss {self.train_loss_metric.result().numpy():.6f}')
             print(f'Time cost for 1 epoch {time.time() - start:.2f} sec\n')
 
     def inference(self, test_data, FLAGS, ckpt_dir, test_refs):
@@ -369,7 +369,7 @@ class DistributeTrain(TrainTemplate):
                                       'best_scores': best_scores})
                             return
 
-            print(f'Epoch {epoch + 1} Loss {self.train_loss_metric.result().numpy():.6f}')
+            print(f'Epoch {epoch + 1} | Loss {self.train_loss_metric.result().numpy():.6f}')
             print(f'Time cost for 1 epoch {time.time() - start:.2f} sec\n')
 
     def inference(self, test_data, FLAGS, ckpt_dir, test_refs):
