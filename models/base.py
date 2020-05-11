@@ -91,7 +91,7 @@ class TrainTemplate(object):
         hypos = np.vstack(hypos).transpose()
         return hypos, batch_loss
 
-    def train_loop(self, train_data, val_data, FLAGS, ckpt_dir, log_file):
+    def train_loop(self, train_data, val_data, FLAGS, ckpt_dir):
         if FLAGS.enable_function:
             self.train_step = tf.function(self.train_step)
             # self.test_step = tf.function(self.test_step)
@@ -147,7 +147,7 @@ class TrainTemplate(object):
                           f"\n {eval_scores} \x1b[0m")
 
                     # early stopping
-                    if m_val_loss < best_val_loss:
+                    if m_val_loss <= best_val_loss or any([eval_scores[k] > best_scores[k] for k in eval_scores]):
                         best_val_loss = m_val_loss
                         best_step = cur_step
                         for k in eval_scores:
@@ -157,9 +157,9 @@ class TrainTemplate(object):
                                       f"best {k}: {best_scores[k]:8.4f} \x1b[0m")
                         if FLAGS.save_models:
                             ckpt_manager.save()
-                            if FLAGS.debug:
-                                if cur_step > 2:
-                                    return
+                            # if FLAGS.debug:
+                            #     if cur_step > 2:
+                            #         return
                     else:
                         early_stop += 1
                         if early_stop >= FLAGS.tol:
@@ -168,7 +168,7 @@ class TrainTemplate(object):
                                 f"best_val_loss= {best_val_loss}, "
                                 f"best_scores={best_scores} \x1b[0m")
                             # save log
-                            save_log(log_file + '/test_results.txt',
+                            save_log(os.path.dirname(ckpt_dir) + '/test_results.txt',
                                      {'model': self.model_config.model_repr,
                                       'best_step': best_step,
                                       'best_val_loss': best_val_loss,
@@ -178,12 +178,13 @@ class TrainTemplate(object):
             print(f'Epoch {epoch + 1} Loss {self.train_loss_metric.result().numpy():.6f}')
             print(f'Time cost for 1 epoch {time.time() - start:.2f} sec\n')
 
-    def inference(self, test_data, ckpt_dir, test_log_path):
+    def inference(self, test_data, FLAGS, ckpt_dir):
         print("Finish training! Starting to test ...")
         # restore model
         ckpt = tf.train.Checkpoint(encoder=self.encoder,
                                    decoder=self.decoder,
                                    optimizer=self.optimizer)
+        ckpt_dir = ckpt_dir if FLAGS.restore_dir is None else FLAGS.restore_dir
         ckpt_manager = tf.train.CheckpointManager(ckpt, ckpt_dir, max_to_keep=5)
         ckpt.restore(ckpt_manager.latest_checkpoint)
         # test
@@ -205,6 +206,7 @@ class TrainTemplate(object):
               f"\n test scores:\n"
               f" {test_scores} \x1b[0m")
         test_scores.update({'test_loss': m_test_loss})
+        test_log_path = os.path.join(os.path.dirname(ckpt_dir), 'test.log')
         try:
             save_log(test_log_path, test_scores)
         except IOError as e:
@@ -267,14 +269,7 @@ class DistributeTrain(TrainTemplate):
     def distributed_test_step(self, x, y):
         return self.strategy.experimental_run_v2(self.test_step, args=(x, y,))
 
-    def train_loop(self, train_data, val_data, FLAGS, ckpt_dir, log_file):
-        # def distributed_train_step(x, y):
-        #     _, per_replica_losses = self.strategy.experimental_run_v2(self.train_step, args=(x, y,))
-        #     return self.strategy.reduce(tf.distribute.ReduceOp.MEAN, per_replica_losses, axis=None)
-        #
-        # def distributed_test_step(x, y):
-        #     return self.strategy.experimental_run_v2(self.test_step, args=(x, y,))
-
+    def train_loop(self, train_data, val_data, FLAGS, ckpt_dir):
         if FLAGS.enable_function:
             self.train_step = tf.function(self.train_step)
             # self.test_step = tf.function(self.test_step)
@@ -344,7 +339,7 @@ class DistributeTrain(TrainTemplate):
                           f"\n {eval_scores} \x1b[0m")
 
                     # early stopping
-                    if m_val_loss < best_val_loss or any([eval_scores[k] > best_scores[k] for k in eval_scores]):
+                    if m_val_loss <= best_val_loss or any([eval_scores[k] > best_scores[k] for k in eval_scores]):
                         best_val_loss = m_val_loss
                         best_step = cur_step
                         for k in eval_scores:
@@ -354,9 +349,9 @@ class DistributeTrain(TrainTemplate):
                                       f"best {k}: {best_scores[k]:8.4f} \x1b[0m")
                         if FLAGS.save_models:
                             ckpt_manager.save()
-                            if FLAGS.debug:
-                                if cur_step > 1:
-                                    return
+                            # if FLAGS.debug:
+                            #     if cur_step > 2:
+                            #         return
                     else:
                         early_stop += 1
                         if early_stop >= FLAGS.tol:
@@ -365,7 +360,7 @@ class DistributeTrain(TrainTemplate):
                                 f"best_val_loss= {best_val_loss:8.4f}, "
                                 f"best_scores={best_scores} \x1b[0m")
                             # save log
-                            save_log(log_file + '/test_results.txt',
+                            save_log(os.path.dirname(ckpt_dir) + '/test_results.txt',
                                      {'model': self.model_config.model_repr,
                                       'best_step': best_step,
                                       'best_val_loss': best_val_loss,
@@ -375,15 +370,17 @@ class DistributeTrain(TrainTemplate):
             print(f'Epoch {epoch + 1} Loss {self.train_loss_metric.result().numpy():.6f}')
             print(f'Time cost for 1 epoch {time.time() - start:.2f} sec\n')
 
-    def inference(self, test_data, ckpt_dir, test_log_path):
+    def inference(self, test_data, FLAGS, ckpt_dir):
         print("Finish training! Starting to test ...")
         # restore model
         ckpt = tf.train.Checkpoint(encoder=self.encoder,
                                    decoder=self.decoder,
                                    optimizer=self.optimizer)
-        ckpt_manager = tf.train.CheckpointManager(ckpt, ckpt_dir, max_to_keep=3)
+        ckpt_dir = ckpt_dir if FLAGS.restore_dir is None else FLAGS.restore_dir
+        ckpt_manager = tf.train.CheckpointManager(ckpt, ckpt_dir,
+                                                  max_to_keep=3)
         status = ckpt.restore(ckpt_manager.latest_checkpoint)
-        status.assert_consumed()
+        # status.assert_consumed()
 
         # test
         test_loss = 0.
@@ -410,6 +407,7 @@ class DistributeTrain(TrainTemplate):
               f"\n test scores:\n"
               f" {test_scores} \x1b[0m")
         test_scores.update({'test_loss': m_test_loss})
+        test_log_path = os.path.join(os.path.dirname(ckpt_dir), 'test.log')
         try:
             save_log(test_log_path, test_scores)
         except IOError as e:

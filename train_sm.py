@@ -242,7 +242,7 @@ def main(argv):
     ckpt_dir = os.path.join(save_dir, f'best-model-{model_repr}')
     # train
     if FLAGS.do_train:
-        model.train_loop(train_data, val_data, FLAGS, ckpt_dir, log_file)
+        model.train_loop(train_data, val_data, FLAGS, ckpt_dir)
 
     if FLAGS.do_test:
         test_data, vocab_dict, idx_word = load_test_data(dataset=FLAGS.dataset,

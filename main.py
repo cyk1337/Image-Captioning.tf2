@@ -35,10 +35,10 @@ def img_cap_flags():
     flags.DEFINE_boolean("reset_cache", False, "Delete processed file if exists")
     flags.DEFINE_boolean('enable_function', True, 'Enable Function?')
 
-    flags.DEFINE_boolean("debug", False, "DEBUG")
+    flags.DEFINE_boolean("debug", True, "DEBUG")
 
     # devices
-    flags.DEFINE_string("CUDA_VISIBLE_DEVICES", '0,1', 'specified gpu num for training')
+    flags.DEFINE_string("CUDA_VISIBLE_DEVICES", '2', 'specified gpu num for training')
 
     # model settings
     flags.DEFINE_enum('model_name', 'ShowAttendTell', ['ShowAttendTell'], 'Model name')
@@ -72,7 +72,7 @@ def img_cap_flags():
 
     # model storage
     flags.DEFINE_boolean("save_models", True, "Whether to save models")
-    flags.DEFINE_string("restore_dir", f'./dir/path', 'The output directory to restore models')
+    flags.DEFINE_string("restore_dir", None, 'set path if use `do_predict` from ckpt path')
 
     # display
     flags.DEFINE_integer("print_every", 100, "Print train and eval every $k$ steps")
@@ -236,7 +236,6 @@ def main(argv):
             save_dir = os.path.join(output_dir, model_repr, 'debug/')
         else:
             save_dir = os.path.join(output_dir, model_repr, datetime.now().strftime("%Y-%m-%d-%H-%M-%S"))
-        log_file = os.path.join(save_dir, f'{datetime.now().strftime("%Y-%m-%d-%H-%M-%S")}.log')
         os.makedirs(save_dir, exist_ok=True)
 
         # load model_config
@@ -255,8 +254,7 @@ def main(argv):
         ckpt_dir = os.path.join(save_dir, f'best-model-{model_repr}')
         # train
         if FLAGS.do_train:
-            # model.train_loop(train_data, val_data, FLAGS, ckpt_dir, log_file)
-            model.train_loop(train_data_dist, val_data_dist, FLAGS, ckpt_dir, log_file)
+            model.train_loop(train_data_dist, val_data_dist, FLAGS, ckpt_dir)
 
         if FLAGS.do_test:
             test_data, vocab_dict, idx_word = load_test_data(dataset=FLAGS.dataset,
@@ -267,8 +265,7 @@ def main(argv):
                                                              test_bsz=FLAGS.test_bsz,
                                                              debug=FLAGS.debug)
             test_data_dist = strategy.experimental_distribute_dataset(test_data)
-            test_log_path = os.path.join(save_dir, 'test.log')
-            model.inference(test_data_dist, ckpt_dir, test_log_path)
+            model.inference(test_data_dist, FLAGS, ckpt_dir)
 
 
 if __name__ == '__main__':

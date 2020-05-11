@@ -15,5 +15,9 @@ conda activate tf2_env
 
 # Run
 ```bash
-(tf2_env) $ python main.py --dataset COCO --do_train True --max_seq_len 30
+(tf2_env) $ python main.py --dataset COCO \
+                           --raw_data_path $DATA_PATH \
+                           --do_train True \
+                           --max_seq_len 30
+                          
 ```
