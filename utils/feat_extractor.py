@@ -39,7 +39,7 @@ class BaseFeatureExtractor(object):
 
 class InceptionV3Extractor(BaseFeatureExtractor):
     def __init__(self, cache_dir, bsz=16):
-        super(InceptionV3Extractor, self).__init__(cache_dir, bsz)
+        super().__init__(cache_dir, bsz)
         img_model = tf.keras.applications.InceptionV3(include_top=False, weights='imagenet')
         input = img_model.input
         hidden_layer = img_model.layers[-1].output
@@ -63,7 +63,7 @@ class InceptionV3Extractor(BaseFeatureExtractor):
 
 class ResNet101V2Extractor(BaseFeatureExtractor):
     def __init__(self, cache_dir, bsz=16):
-        super(ResNet101V2Extractor, self).__init__(cache_dir, bsz)
+        super().__init__(cache_dir, bsz)
         img_model = tf.keras.applications.ResNet101V2(include_top=False, weights='imagenet')
         input = img_model.input
         hidden_layer = img_model.layers[-1].output
@@ -87,7 +87,7 @@ class ResNet101V2Extractor(BaseFeatureExtractor):
 
 class CNNExtractor(BaseFeatureExtractor):
     def __init__(self, cache_dir, model=None, bsz=16):
-        super(CNNExtractor, self).__init__(cache_dir, bsz)
+        super().__init__(cache_dir, bsz)
         if model is None:
             raise NotImplementedError
         img_model = model(include_top=False, weights='imagenet')

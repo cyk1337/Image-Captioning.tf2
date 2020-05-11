@@ -24,7 +24,8 @@ from utils.feat_extractor import *
 
 class BaseLoader(object):
     def __init__(self, data_dir, cache_dir, feat_type, min_count=5):
-        self.split_annotations, self.all_images_path = defaultdict(list), defaultdict(list)
+        self.split_annotations = defaultdict(list)
+        self.split_img_path = defaultdict(list)
         self.word_idx = {
             PAD: pad_id,
             UNK: unk_id,
@@ -61,6 +62,9 @@ class BaseLoader(object):
             'train': os.path.join(self.cache_dir, 'train.pkl'),
             'val': os.path.join(self.cache_dir, 'val.pkl'),
             'test': os.path.join(self.cache_dir, 'test.pkl'),
+            'ref_train': os.path.join(self.cache_dir, 'ref_train.pkl'),
+            'ref_val': os.path.join(self.cache_dir, 'ref_val.pkl'),
+            'ref_test': os.path.join(self.cache_dir, 'ref_test.pkl'),
             'split_annotations': os.path.join(self.cache_dir, 'split_annotations.pkl')
         }
 
@@ -101,17 +105,33 @@ class BaseLoader(object):
         k = self.feat_type
         print(f'Extracting data from CNN:{k} ...')
         extractor = CNNExtractor(self.feat_subdirs[k], model=self.cnn_extractors[k])
-        for v in self.all_images_path.values():
+        for v in self.split_img_path.values():
             extractor(v)
 
     def load_train_val_data(self):
-        train_data = self.load_pkl(self.cache_paths['train'])
-        val_data = self.load_pkl(self.cache_paths['val'])
-        return train_data, val_data
+        train_captions, train_imgids, train_img_path, = self.load_pkl(self.cache_paths['train'])
+        train_imgs = [train_img_path[imgid] for imgid in train_imgids]
+
+        val_img_captions, val_img_path = self.load_pkl(self.cache_paths['val'])
+        val_captions = [val_img_captions[imgid][0] for imgid in val_img_path]
+        val_imgs = list(val_img_path.values())
+        val_img_ids = list(val_img_path.keys())
+        return (train_imgids, train_imgs, train_captions), (val_img_ids, val_imgs, val_captions)
 
     def load_test_data(self):
-        test_data = self.load_pkl(self.cache_paths['test'])
-        return test_data
+        test_img_captions, test_img_path = self.load_pkl(self.cache_paths['test'])
+        test_captions = [test_img_captions[imgid][0] for imgid in test_img_path]
+        test_imgs = list(test_img_path.values())
+        img_ids = list(test_img_path.keys())
+        return img_ids, test_imgs, test_captions
+
+    def load_val_ref(self):
+        val_ref = self.load_pkl(self.cache_paths['ref_val'])
+        return val_ref
+
+    def load_test_ref(self):
+        test_ref = self.load_pkl(self.cache_paths['ref_test'])
+        return test_ref
 
     def fit_on_texts(self):
         raise NotImplementedError
@@ -150,28 +170,31 @@ class BaseLoader(object):
             data = pickle.load(f)
         return data
 
-    def map_func(self, img_name, cap):
+    def map_func(self, ids, img_name, cap):
         img_path = os.path.join(self.feat_subdirs[self.feat_type], img_name.decode('utf-8'))
         img_tensor = np.load(img_path + '.npy')
-        return img_tensor, cap
+        return ids, img_tensor, cap
 
-    def set_shapes(self, img, cap, img_shape, cap_shape):
+    def set_shapes(self, ids, img, cap, ids_shape, img_shape, cap_shape):
+        ids.set_shape(ids_shape)
         img.set_shape(img_shape)
         cap.set_shape(cap_shape)
-        return img, cap
+        return ids, img, cap
 
-    def data_generator(self, imgs, caps, bsz, buffer_size=1000, seed=RANDOM_SEED):
+    def data_generator(self, img_ids, imgs, caps, bsz, buffer_size=1000, seed=RANDOM_SEED, shuffle=True):
         # imgs = tf.data.Dataset.from_tensor_slices(imgs)
-        caps_shape = caps.shape
+        img_ids = np.array(img_ids, dtype=np.int32)
         # caps = tf.data.Dataset.from_tensor_slices(caps)
         # dataset = tf.data.Dataset.zip((imgs, caps))
 
-        dataset = tf.data.Dataset.from_tensor_slices((imgs, caps))
+        dataset = tf.data.Dataset.from_tensor_slices((img_ids, imgs, caps))
         dataset = dataset.map(
-            lambda item1, item2: tf.numpy_function(self.map_func, [item1, item2], [tf.float32, tf.int32]),
+            lambda item0, item1, item2: tf.numpy_function(self.map_func, [item0, item1, item2],
+                                                          [tf.int32, tf.float32, tf.int32]),
             num_parallel_calls=tf.data.experimental.AUTOTUNE)
-        dataset = dataset.map(lambda img, cap: self.set_shapes(img, cap, (None, None), caps_shape[1:]))
-        dataset = dataset.shuffle(buffer_size=buffer_size, seed=seed).batch(bsz)
+        dataset = dataset.map(lambda ids, img, cap: self.set_shapes(ids, img, cap, img_ids.shape[1:], (None, None), caps.shape[1:]))
+        if shuffle:
+            dataset = dataset.shuffle(buffer_size=buffer_size, seed=seed).batch(bsz)
         dataset = dataset.prefetch(buffer_size=tf.data.experimental.AUTOTUNE)
         return dataset
 
@@ -232,8 +255,8 @@ class MSCOCOLoader(BaseLoader):
                     for w in sent['tokens']:
                         self.vocab[w] += 1
             self.split_annotations[data_type].append(
-                [annot['filename'], [[START] + sent['tokens'] + [END] for sent in annot['sentences']]])
-            self.all_images_path[data_type].append(os.path.join(data_dir, annot['filepath'], annot['filename']))
+                [annot['imgid'], annot['filename'], [sent['tokens'] for sent in annot['sentences']]])
+            self.split_img_path[data_type].append(os.path.join(data_dir, annot['filepath'], annot['filename']))
         self.build_vocab()
         self.process_annotations_coco(self.split_annotations)
         self.extract_feats()
@@ -255,17 +278,39 @@ class MSCOCOLoader(BaseLoader):
         # ==================================================
 
     def process_annotations_coco(self, split_annotations):
-        cache_annots = defaultdict(list)
+        split_imgid = defaultdict(list)
+        split_captions = defaultdict(list)
+        dict_img_path = defaultdict(dict)
+        dict_img_captions = defaultdict(dict)
         for k in split_annotations:
             imgs, caps = [], []
-            for sample in split_annotations[k]:
-                for tokens in sample[1]:
-                    seqs = self.tokens_to_sequences(tokens)
-                    imgs.append(sample[0])
-                    caps.append(seqs)
-                    # text_dict.update({'seqs': seqs})
-            cache_annots[k] = [imgs, caps]
-            self.save_pkl(cache_annots[k], self.cache_paths[k])
+            # for sample in split_annotations[k]:
+            #     for tokens in sample[-1]:
+            #         seqs = self.tokens_to_sequences([START] + tokens + [END])
+            #         imgs.append(sample[1])
+            #         caps.append(seqs)
+            #         # text_dict.update({'seqs': seqs})
+            # if k == 'train':
+            #
+            # else:
+            #     for sample in split_annotations[k]:
+            #         seqs = [self.tokens_to_sequences([START] + tokens + [END]) for tokens in sample[-1]]
+            #         caps.append(seqs)
+            #         imgs.append(sample[1])
+
+            for imgid, img_path, refs in split_annotations[k]:
+                seqs = [self.tokens_to_sequences([START] + ref + [END]) for ref in refs]
+                if k == 'train':
+                    split_captions[k].extend(seqs)
+                    split_imgid[k].extend([imgid for _ in range(len(refs))])
+                else:
+                    dict_img_captions[k].update({imgid: seqs})
+                dict_img_path[k].update({imgid: img_path})
+            if k == 'train':
+                self.save_pkl([split_captions[k], split_imgid[k], dict_img_path[k]], self.cache_paths[k])
+            else:
+                self.save_pkl([dict_img_captions[k], dict_img_path[k]], self.cache_paths[k])
+            self.save_pkl(dict_img_captions[k], self.cache_paths[f'ref_{k}'])
         self.save_pkl(split_annotations, self.cache_paths['split_annotations'])
 
 
@@ -277,5 +322,5 @@ if __name__ == '__main__':
         "COCO": "/home/c/Cpt/COCO",
     }
     data_name = 'COCO'
-    ft_type = 'densenet_121'
+    ft_type = 'inception_v3'
     dataset = data_loaders[data_name](data_dir=data_dirs[data_name], feat_type=ft_type, reset_cache=True)

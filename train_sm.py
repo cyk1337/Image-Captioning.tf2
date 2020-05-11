@@ -35,15 +35,15 @@ def img_cap_flags():
     flags.DEFINE_boolean("reset_cache", False, "Delete processed file if exists")
     flags.DEFINE_boolean('enable_function', True, 'Enable Function?')
 
-    flags.DEFINE_boolean("debug", False, "DEBUG")
+    flags.DEFINE_boolean("debug", True, "DEBUG")
 
     # model settings
-    flags.DEFINE_string('model_name', 'ShowAttendTell', 'Model name')
+    flags.DEFINE_enum('model_name', 'ShowAttendTell', ['ShowAttendTell'], 'Model name')
     flags.DEFINE_string('cnn_type', 'inception_v3', 'CNN encoder type: ')
     flags.DEFINE_integer('feat_shape', 2048, 'Feature shape')
     flags.DEFINE_boolean("use_pretrained_embed", False, "Whether to use pretrained embeddings")
     flags.DEFINE_string('embed_path', None, 'Pre-trained embedding path')
-    flags.DEFINE_string('optim_name', 'Adam', 'Optimizer')
+    flags.DEFINE_enum('optim_name', 'Adam', ['Adam', 'RMSProp', 'SGD'], 'Optimizer')
 
     flags.DEFINE_boolean("do_train", True, "Train mode")
     flags.DEFINE_boolean("do_test", True, "Inference on the test set")
@@ -52,9 +52,9 @@ def img_cap_flags():
 
     # hyper-params
     flags.DEFINE_integer("max_seq_len", 30, "Max sequence length for each inputs")
-    flags.DEFINE_integer("train_bsz", 512, "Batch size in the train mode")
-    flags.DEFINE_integer("val_bsz", 512, "Batch size in the eval mode")
-    flags.DEFINE_integer("test_bsz", 512, "Batch size in the test mode")
+    flags.DEFINE_integer("train_bsz", 100, "Batch size in the train mode")
+    flags.DEFINE_integer("val_bsz", 100, "Batch size in the eval mode")
+    flags.DEFINE_integer("test_bsz", 100, "Batch size in the test mode")
     flags.DEFINE_integer("max_num_words", None, "Maximum vocabulary size")
     flags.DEFINE_integer("embed_dim", 300, "Embedding dim")
     flags.DEFINE_integer("h_dim", 512, "Attn_dim")
@@ -68,11 +68,11 @@ def img_cap_flags():
     flags.DEFINE_integer("val_every", 200, "Every K epoch to evaluate once on eval set")
 
     # devices
-    flags.DEFINE_string("CUDA_VISIBLE_DEVICES", '0', 'specified gpu num for training')
+    flags.DEFINE_string("CUDA_VISIBLE_DEVICES", '3', 'specified gpu num for training')
 
     # model storage
     flags.DEFINE_boolean("save_models", True, "Whether to save models")
-    flags.DEFINE_string("restore_dir", f'./dir/path', 'The output directory to restore models')
+    flags.DEFINE_string("restore_dir", None, 'set path if use `do_predict` from ckpt path')
 
     # display
     flags.DEFINE_integer("print_every", 100, "Print train and eval every $k$ steps")
@@ -93,39 +93,44 @@ def create_dataset(dataset, raw_data_path, cnn_type, reset_cache, max_seq_len, t
                    debug):
     data_loader = load_dataset(dataset, raw_data_path, cnn_type, reset_cache)
     vocab_dict = data_loader.get_word_idx()
-    (train_imgs, train_caps), (val_imgs, val_caps) = data_loader.load_train_val_data()
+    ref_val = data_loader.load_val_ref()
+    (train_imgids, train_imgs, train_caps), (val_imgids, val_imgs, val_caps) = data_loader.load_train_val_data()
     # ====================================
     if debug:
         train_imgs = train_imgs[:3000]
         train_caps = train_caps[:3000]
+        train_imgids = train_imgids[:3000]
         print("\x1b[1;33;m Start debugging with 3000 data samples .. \x1b[0m")
-        val_imgs = val_imgs[:300]
-        val_caps = val_caps[:300]
-        print("\x1b[1;33;m Start debugging with 300 val data samples .. \x1b[0m")
+        # val_imgids = val_imgids[:300]
+        # val_imgs = val_imgs[:300]
+        # val_caps = val_caps[:300]
+        # print("\x1b[1;33;m Start debugging with 300 val data samples .. \x1b[0m")
     # ====================================
     # train
     padded_train_caps = tf.keras.preprocessing.sequence.pad_sequences(train_caps, padding='post', maxlen=max_seq_len)
-    train_data = data_loader.data_generator(train_imgs, padded_train_caps, train_bsz)
+    train_data = data_loader.data_generator(train_imgids, train_imgs, padded_train_caps, train_bsz)
     # val
     padded_val_caps = tf.keras.preprocessing.sequence.pad_sequences(val_caps, padding='post', maxlen=max_seq_len)
-    val_data = data_loader.data_generator(val_imgs, padded_val_caps, val_bsz)
-    return train_data, val_data, vocab_dict, data_loader.idx_word
+    val_data = data_loader.data_generator(val_imgids, val_imgs, padded_val_caps, val_bsz)
+    return train_data, val_data, vocab_dict, data_loader.idx_word, ref_val
 
 
 def load_test_data(dataset, raw_data_path, cnn_type, reset_cache, max_seq_len, test_bsz, debug):
     data_loader = load_dataset(dataset, raw_data_path, cnn_type, reset_cache)
     vocab_dict = data_loader.get_word_idx()
-    (test_imgs, test_caps) = data_loader.load_test_data()
+    test_refs = data_loader.load_test_ref()
+    (test_imgids, test_imgs, test_caps) = data_loader.load_test_data()
     # ====================================
-    if debug:
-        test_imgs = test_imgs[:300]
-        test_caps = test_caps[:300]
-        print("Start debugging with 300 test data samples ..")
+    # if debug:
+    #     test_imgids = test_imgids[:300]
+    #     test_imgs = test_imgs[:300]
+    #     test_caps = test_caps[:300]
+    #     print("Start debugging with 300 test data samples ..")
     # ====================================
     # test
     padded_test_caps = tf.keras.preprocessing.sequence.pad_sequences(test_caps, padding='post', maxlen=max_seq_len)
-    test_data = data_loader.data_generator(test_imgs, padded_test_caps, test_bsz)
-    return test_data, vocab_dict, data_loader.idx_word
+    test_data = data_loader.data_generator(test_imgids, test_imgs, padded_test_caps, test_bsz)
+    return test_data, vocab_dict, data_loader.idx_word, test_refs
 
 
 def create_model(model_name, model_config, optimizer):
@@ -199,14 +204,14 @@ def main(argv):
     # ==============================
     # load train / eval data
     # ==============================
-    train_data, val_data, vocab_dict, idx_word = create_dataset(dataset=FLAGS.dataset,
-                                                                raw_data_path=FLAGS.raw_data_path,
-                                                                cnn_type=FLAGS.cnn_type,
-                                                                reset_cache=FLAGS.reset_cache,
-                                                                max_seq_len=FLAGS.max_seq_len + 1,
-                                                                train_bsz=FLAGS.train_bsz,
-                                                                val_bsz=FLAGS.val_bsz,
-                                                                debug=FLAGS.debug)
+    train_data, val_data, vocab_dict, idx_word, ref_val = create_dataset(dataset=FLAGS.dataset,
+                                                                         raw_data_path=FLAGS.raw_data_path,
+                                                                         cnn_type=FLAGS.cnn_type,
+                                                                         reset_cache=FLAGS.reset_cache,
+                                                                         max_seq_len=FLAGS.max_seq_len + 1,
+                                                                         train_bsz=FLAGS.train_bsz,
+                                                                         val_bsz=FLAGS.val_bsz,
+                                                                         debug=FLAGS.debug)
 
     if FLAGS.max_num_words is not None:
         vocab_size = max(FLAGS.max_num_words, len(vocab_dict))
@@ -224,7 +229,6 @@ def main(argv):
     model_repr = '_'.join([f"{k}{v}" for k, v in hyperparams_to_tune.items()])
     # save_dir = os.path.join(output_dir, model_repr)
     save_dir = os.path.join(output_dir, model_repr, datetime.now().strftime("%Y-%m-%d-%H-%M-%S"))
-    log_file = os.path.join(save_dir, f'{datetime.now().strftime("%Y-%m-%d-%H-%M-%S")}.log')
     os.makedirs(save_dir, exist_ok=True)
 
     # load model_config
@@ -242,18 +246,17 @@ def main(argv):
     ckpt_dir = os.path.join(save_dir, f'best-model-{model_repr}')
     # train
     if FLAGS.do_train:
-        model.train_loop(train_data, val_data, FLAGS, ckpt_dir)
+        model.train_loop(train_data, val_data, FLAGS, ckpt_dir, ref_val)
 
     if FLAGS.do_test:
-        test_data, vocab_dict, idx_word = load_test_data(dataset=FLAGS.dataset,
-                                                         raw_data_path=FLAGS.raw_data_path,
-                                                         cnn_type=FLAGS.cnn_type,
-                                                         reset_cache=FLAGS.reset_cache,
-                                                         max_seq_len=FLAGS.max_seq_len + 1,
-                                                         test_bsz=FLAGS.test_bsz,
-                                                         debug=FLAGS.debug)
-        test_log_path = os.path.join(save_dir, 'test.log')
-        model.inference(test_data, ckpt_dir, test_log_path)
+        test_data, vocab_dict, idx_word, test_ref = load_test_data(dataset=FLAGS.dataset,
+                                                                   raw_data_path=FLAGS.raw_data_path,
+                                                                   cnn_type=FLAGS.cnn_type,
+                                                                   reset_cache=FLAGS.reset_cache,
+                                                                   max_seq_len=FLAGS.max_seq_len + 1,
+                                                                   test_bsz=FLAGS.test_bsz,
+                                                                   debug=FLAGS.debug)
+        model.inference(test_data, FLAGS, ckpt_dir, test_ref)
 
         # plt.plot(loss_plot)
         # plt.xlabel('Epochs')

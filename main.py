@@ -38,7 +38,7 @@ def img_cap_flags():
     flags.DEFINE_boolean("debug", True, "DEBUG")
 
     # devices
-    flags.DEFINE_string("CUDA_VISIBLE_DEVICES", '2', 'specified gpu num for training')
+    flags.DEFINE_string("CUDA_VISIBLE_DEVICES", '2,3', 'specified gpu num for training')
 
     # model settings
     flags.DEFINE_enum('model_name', 'ShowAttendTell', ['ShowAttendTell'], 'Model name')
@@ -55,9 +55,9 @@ def img_cap_flags():
 
     # hyper-params
     flags.DEFINE_integer("max_seq_len", 30, "Max sequence length for each inputs")
-    flags.DEFINE_integer("train_bsz", 1024, "Batch size in the train mode")
-    flags.DEFINE_integer("val_bsz", 1000, "Batch size in the eval mode")
-    flags.DEFINE_integer("test_bsz", 1000, "Batch size in the test mode")
+    flags.DEFINE_integer("train_bsz", 100, "Batch size in the train mode")
+    flags.DEFINE_integer("val_bsz", 100, "Batch size in the eval mode")
+    flags.DEFINE_integer("test_bsz", 100, "Batch size in the test mode")
     flags.DEFINE_integer("max_num_words", None, "Maximum vocabulary size")
     flags.DEFINE_integer("embed_dim", 256, "Embedding dim")
     flags.DEFINE_integer("h_dim", 512, "Attn_dim")
@@ -93,39 +93,44 @@ def create_dataset(dataset, raw_data_path, cnn_type, reset_cache, max_seq_len, t
                    debug):
     data_loader = load_dataset(dataset, raw_data_path, cnn_type, reset_cache)
     vocab_dict = data_loader.get_word_idx()
-    (train_imgs, train_caps), (val_imgs, val_caps) = data_loader.load_train_val_data()
+    ref_val = data_loader.load_val_ref()
+    (train_imgids, train_imgs, train_caps), (val_imgids, val_imgs, val_caps) = data_loader.load_train_val_data()
     # ====================================
     if debug:
+        train_imgids = train_imgids[:3000]
         train_imgs = train_imgs[:3000]
         train_caps = train_caps[:3000]
         print("\x1b[1;33;m Start debugging with 3000 data samples .. \x1b[0m")
-        val_imgs = val_imgs[:300]
-        val_caps = val_caps[:300]
-        print("\x1b[1;33;m Start debugging with 300 val data samples .. \x1b[0m")
+        # val_imgids = val_imgids[:300]
+        # val_imgs = val_imgs[:300]
+        # val_caps = val_caps[:300]
+        # print("\x1b[1;33;m Start debugging with 300 val data samples .. \x1b[0m")
     # ====================================
     # train
     padded_train_caps = tf.keras.preprocessing.sequence.pad_sequences(train_caps, padding='post', maxlen=max_seq_len)
-    train_data = data_loader.data_generator(train_imgs, padded_train_caps, train_bsz)
+    train_data = data_loader.data_generator(train_imgids, train_imgs, padded_train_caps, train_bsz)
     # val
     padded_val_caps = tf.keras.preprocessing.sequence.pad_sequences(val_caps, padding='post', maxlen=max_seq_len)
-    val_data = data_loader.data_generator(val_imgs, padded_val_caps, val_bsz)
-    return train_data, val_data, vocab_dict, data_loader.idx_word
+    val_data = data_loader.data_generator(val_imgids, val_imgs, padded_val_caps, val_bsz)
+    return train_data, val_data, vocab_dict, data_loader.idx_word, ref_val
 
 
 def load_test_data(dataset, raw_data_path, cnn_type, reset_cache, max_seq_len, test_bsz, debug):
     data_loader = load_dataset(dataset, raw_data_path, cnn_type, reset_cache)
     vocab_dict = data_loader.get_word_idx()
-    (test_imgs, test_caps) = data_loader.load_test_data()
+    test_refs = data_loader.load_test_ref()
+    (test_imgids, test_imgs, test_caps) = data_loader.load_test_data()
     # ====================================
-    if debug:
-        test_imgs = test_imgs[:300]
-        test_caps = test_caps[:300]
-        print("Start debugging with 300 test data samples ..")
+    # if debug:
+    #     test_imgids = test_imgids[:300]
+    #     test_imgs = test_imgs[:300]
+    #     test_caps = test_caps[:300]
+    #     print("Start debugging with 300 test data samples ..")
     # ====================================
     # test
     padded_test_caps = tf.keras.preprocessing.sequence.pad_sequences(test_caps, padding='post', maxlen=max_seq_len)
-    test_data = data_loader.data_generator(test_imgs, padded_test_caps, test_bsz)
-    return test_data, vocab_dict, data_loader.idx_word
+    test_data = data_loader.data_generator(test_imgids, test_imgs, padded_test_caps, test_bsz)
+    return test_data, vocab_dict, data_loader.idx_word, test_refs
 
 
 def create_model(model_name, model_config, optimizer, strategy):
@@ -202,14 +207,15 @@ def main(argv):
     # ==============================
     # load train / eval data
     # ==============================
-    train_data, val_data, vocab_dict, idx_word = create_dataset(dataset=FLAGS.dataset,
-                                                                raw_data_path=FLAGS.raw_data_path,
-                                                                cnn_type=FLAGS.cnn_type,
-                                                                reset_cache=FLAGS.reset_cache,
-                                                                max_seq_len=FLAGS.max_seq_len + 1,
-                                                                train_bsz=FLAGS.train_bsz,
-                                                                val_bsz=FLAGS.val_bsz,
-                                                                debug=FLAGS.debug)
+    train_data, val_data, vocab_dict, idx_word, val_refs = create_dataset(dataset=FLAGS.dataset,
+                                                                          raw_data_path=FLAGS.raw_data_path,
+                                                                          cnn_type=FLAGS.cnn_type,
+                                                                          reset_cache=FLAGS.reset_cache,
+                                                                          # reset_cache=True,
+                                                                          max_seq_len=FLAGS.max_seq_len + 1,
+                                                                          train_bsz=FLAGS.train_bsz,
+                                                                          val_bsz=FLAGS.val_bsz,
+                                                                          debug=FLAGS.debug)
 
     train_data_dist = strategy.experimental_distribute_dataset(train_data)
     val_data_dist = strategy.experimental_distribute_dataset(val_data)
@@ -254,10 +260,10 @@ def main(argv):
         ckpt_dir = os.path.join(save_dir, f'best-model-{model_repr}')
         # train
         if FLAGS.do_train:
-            model.train_loop(train_data_dist, val_data_dist, FLAGS, ckpt_dir)
+            model.train_loop(train_data_dist, val_data_dist, FLAGS, ckpt_dir, val_refs)
 
         if FLAGS.do_test:
-            test_data, vocab_dict, idx_word = load_test_data(dataset=FLAGS.dataset,
+            test_data, vocab_dict, idx_word, test_refs = load_test_data(dataset=FLAGS.dataset,
                                                              raw_data_path=FLAGS.raw_data_path,
                                                              cnn_type=FLAGS.cnn_type,
                                                              reset_cache=FLAGS.reset_cache,
@@ -265,7 +271,7 @@ def main(argv):
                                                              test_bsz=FLAGS.test_bsz,
                                                              debug=FLAGS.debug)
             test_data_dist = strategy.experimental_distribute_dataset(test_data)
-            model.inference(test_data_dist, FLAGS, ckpt_dir)
+            model.inference(test_data_dist, FLAGS, ckpt_dir, test_refs)
 
 
 if __name__ == '__main__':

@@ -34,6 +34,7 @@ from sklearn.utils import shuffle
 from typing import List
 
 import os
+
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
 import codecs
@@ -85,14 +86,14 @@ def print_configuration_op(FLAGS):
     print(f'End of configuration\n {"=" * 80}')
 
 
-def evaluate(hypos, refs, idx_word, scorer, save_path=None):
-    hypos = np.vstack(hypos)
-    refs = np.vstack(refs)
-    assert hypos.shape == refs.shape, 'Shape mismatch!'
-    hypos_sentences = seqs_to_sentences(hypos, idx_word)
-    refs_sentences = seqs_to_sentences(refs, idx_word)
-    hypos_sentences = {k: [v] for k, v in enumerate(hypos_sentences)}
-    refs_sentences = {k: [v] for k, v in enumerate(refs_sentences)}
+def evaluate(hypos: dict, refs: dict, idx_word, scorer, save_path=None):
+    assert hypos.keys() == refs.keys(), 'Not all hypothesis provided!'
+    hypos_sentences = {k: [tokens_to_sentence(v, idx_word)] for k, v in hypos.items()}
+    refs_sentences = {k: seqs_to_sentences(v, idx_word) for k, v in refs.items()}
+    # hypos_sentences = seqs_to_sentences(hypos, idx_word)
+    # refs_sentences = seqs_to_sentences(refs, idx_word)
+    # hypos_sentences = {k: [v] for k, v in enumerate(hypos_sentences)}
+    # refs_sentences = {k: [v] for k, v in enumerate(refs_sentences)}
     results = scorer(hypos_sentences, refs_sentences)
     if save_path:
         with open(save_path, 'w') as f:
@@ -136,7 +137,9 @@ def seqs_to_sentences(tokens_list, idx_word):
 
 def tokens_to_sentence(tokens, idx_word):
     ws = []
-    for idx in tokens:
+    for i, idx in enumerate(tokens):
+        if i == 0 and idx == START:
+            continue
         if idx == pad_id or idx == end_id:
             break
         w = idx_word[idx]

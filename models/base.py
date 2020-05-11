@@ -91,7 +91,7 @@ class TrainTemplate(object):
         hypos = np.vstack(hypos).transpose()
         return hypos, batch_loss
 
-    def train_loop(self, train_data, val_data, FLAGS, ckpt_dir):
+    def train_loop(self, train_data, val_data, FLAGS, ckpt_dir, val_refs):
         if FLAGS.enable_function:
             self.train_step = tf.function(self.train_step)
             # self.test_step = tf.function(self.test_step)
@@ -100,7 +100,6 @@ class TrainTemplate(object):
         # ==============================
         start_epoch = 0
         if FLAGS.save_models:
-            # ckpt_prefix = os.path.join(ckpt_dir, 'ckpt')
             ckpt = tf.train.Checkpoint(encoder=self.encoder,
                                        decoder=self.decoder,
                                        optimizer=self.optimizer)
@@ -119,7 +118,7 @@ class TrainTemplate(object):
             self.train_loss_metric.reset_states()
             start = time.time()
             train_loss = 0.
-            for (batch, (img, cap)) in enumerate(train_data):
+            for (batch, (imgid, img, cap)) in enumerate(train_data):
                 loss, batch_loss = self.train_step(img, cap)
                 train_loss += batch_loss
 
@@ -132,12 +131,11 @@ class TrainTemplate(object):
                     print(f"{'*' * 50}  Evaluating {cur_step}-th step {'*' * 50}")
                     val_loss = 0.
                     self.test_loss_metric.reset_states()
-                    val_hypos, val_refs = [], []
-                    for (val_batch, (val_img, val_ref)) in enumerate(val_data):
+                    val_hypos = {}
+                    for (val_batch, (val_imgid, val_img, val_ref)) in enumerate(val_data):
                         val_hypo, batch_loss = self.test_step(val_img, val_ref)
                         val_loss += batch_loss
-                        val_hypos.append(val_hypo)
-                        val_refs.append(val_ref[:, 1:])
+                        val_hypos.update({k: v for k, v in zip(val_imgid.numpy().tolist(), val_hypo.tolist())})
                     avg_val_loss = val_loss / (val_batch + 1)
                     m_val_loss = self.test_loss_metric.result().numpy()
                     eval_scores = evaluate(val_hypos, val_refs, self.idx_word, scorer=self.scorer)
@@ -147,7 +145,7 @@ class TrainTemplate(object):
                           f"\n {eval_scores} \x1b[0m")
 
                     # early stopping
-                    if m_val_loss <= best_val_loss or any([eval_scores[k] > best_scores[k] for k in eval_scores]):
+                    if m_val_loss < best_val_loss or any([eval_scores[k] > best_scores[k] for k in eval_scores]):
                         best_val_loss = m_val_loss
                         best_step = cur_step
                         for k in eval_scores:
@@ -157,9 +155,9 @@ class TrainTemplate(object):
                                       f"best {k}: {best_scores[k]:8.4f} \x1b[0m")
                         if FLAGS.save_models:
                             ckpt_manager.save()
-                            # if FLAGS.debug:
-                            #     if cur_step > 2:
-                            #         return
+                            if FLAGS.debug:
+                                if cur_step > 1:
+                                    return
                     else:
                         early_stop += 1
                         if early_stop >= FLAGS.tol:
@@ -178,7 +176,7 @@ class TrainTemplate(object):
             print(f'Epoch {epoch + 1} Loss {self.train_loss_metric.result().numpy():.6f}')
             print(f'Time cost for 1 epoch {time.time() - start:.2f} sec\n')
 
-    def inference(self, test_data, FLAGS, ckpt_dir):
+    def inference(self, test_data, FLAGS, ckpt_dir, test_refs):
         print("Finish training! Starting to test ...")
         # restore model
         ckpt = tf.train.Checkpoint(encoder=self.encoder,
@@ -190,12 +188,11 @@ class TrainTemplate(object):
         # test
         test_loss = 0.
         self.test_loss_metric.reset_states()
-        test_hypos, test_refs = [], []
-        for (test_batch, (test_img, test_ref)) in enumerate(test_data):
+        test_hypos = {}
+        for (test_batch, (test_imgid, test_img, test_ref)) in enumerate(test_data):
             test_hypo, batch_loss = self.test_step(test_img, test_ref)
             test_loss += batch_loss
-            test_hypos.append(test_hypo)
-            test_refs.append(test_ref[:, 1:])
+            test_hypos.update({k: v for k, v in zip(test_imgid.numpy().tolist(), test_hypo.tolist())})
         avg_test_loss = test_loss / (test_batch + 1)
         m_test_loss = self.test_loss_metric.result().numpy()
         gen_captions_path = os.path.join(os.path.dirname(ckpt_dir), 'gen_captions.txt')
@@ -269,7 +266,7 @@ class DistributeTrain(TrainTemplate):
     def distributed_test_step(self, x, y):
         return self.strategy.experimental_run_v2(self.test_step, args=(x, y,))
 
-    def train_loop(self, train_data, val_data, FLAGS, ckpt_dir):
+    def train_loop(self, train_data, val_data, FLAGS, ckpt_dir, val_refs):
         if FLAGS.enable_function:
             self.train_step = tf.function(self.train_step)
             # self.test_step = tf.function(self.test_step)
@@ -283,10 +280,10 @@ class DistributeTrain(TrainTemplate):
                                        decoder=self.decoder,
                                        optimizer=self.optimizer)
             ckpt_manager = tf.train.CheckpointManager(ckpt, ckpt_dir, max_to_keep=5)
-            if ckpt_manager.latest_checkpoint:
-                start_epoch = int(ckpt_manager.latest_checkpoint.split('-')[-1])
-                status = ckpt.restore(ckpt_manager.latest_checkpoint)
-                status.assert_existing_objects_matched()
+            # if ckpt_manager.latest_checkpoint:
+            #     start_epoch = int(ckpt_manager.latest_checkpoint.split('-')[-1])
+            #     status = ckpt.restore(ckpt_manager.latest_checkpoint)
+            #     status.assert_existing_objects_matched()
 
         # early stopping
         best_scores = {k: 0. for k in ('BLEU-1', 'BLEU-2', 'BLEU-3', 'BLEU-4', 'METEOR', 'ROUGE', 'CIDEr')}
@@ -298,7 +295,7 @@ class DistributeTrain(TrainTemplate):
             self.train_loss_metric.reset_states()
             start = time.time()
             train_loss = 0.
-            for (batch, (img, cap)) in enumerate(train_data):
+            for (batch, (imgid, img, cap)) in enumerate(train_data):
                 # loss, batch_loss = self.train_step(img, cap)
                 loss, batch_loss = self.distributed_train_step(img, cap)
                 train_loss += batch_loss
@@ -319,18 +316,23 @@ class DistributeTrain(TrainTemplate):
                     print(f"{'*' * 50}  Evaluating {cur_step}-th step {'*' * 50}")
                     val_loss = 0.
                     self.test_loss_metric.reset_states()
-                    val_hypos, val_refs = [], []
-                    for (val_batch, (val_img, val_ref)) in enumerate(val_data):
+                    val_hypos = {}
+                    for (val_batch, (val_imgid, val_img, val_ref)) in enumerate(val_data):
                         val_hypo, batch_loss = self.distributed_test_step(val_img, val_ref)
                         if self.strategy.num_replicas_in_sync > 1:
                             val_loss += sum(per_replica_loss.numpy() for per_replica_loss in batch_loss.values)
-                            val_hypos.extend(list(val_hypo.values))
-                            val_refs.extend([ref[:, 1:] for ref in val_ref.values])
+                            for i in range(self.strategy.num_replicas_in_sync):
+                                imgid = val_imgid.values[i]
+                                hypo = val_hypo.values[i]
+                                val_hypos.update({k: v for k, v in zip(imgid.numpy().tolist(), hypo.tolist())})
+                            # val_hypos.extend(list(val_hypo.values))
+                            # val_refs.extend([ref[:, 1:] for ref in val_ref.values])
                         else:
                             val_loss += batch_loss
-                            val_hypos.append(val_hypo)
-                            val_refs.append(val_ref[:, 1:])
-                    avg_val_loss = val_loss / [(val_batch + 1) * self.strategy.num_replicas_in_sync]
+                            val_hypos.update({k: v for k, v in zip(val_imgid.numpy().tolist(), val_hypo.tolist())})
+                            # val_hypos.append(val_hypo)
+                            # val_refs.append(val_ref[:, 1:])
+                    avg_val_loss = val_loss / ((val_batch + 1) * self.strategy.num_replicas_in_sync)
                     m_val_loss = self.test_loss_metric.result().numpy()
                     eval_scores = evaluate(val_hypos, val_refs, self.idx_word, scorer=self.scorer)
                     print(f"\x1b[1;36;m Step {cur_step},  "
@@ -349,9 +351,9 @@ class DistributeTrain(TrainTemplate):
                                       f"best {k}: {best_scores[k]:8.4f} \x1b[0m")
                         if FLAGS.save_models:
                             ckpt_manager.save()
-                            # if FLAGS.debug:
-                            #     if cur_step > 2:
-                            #         return
+                            if FLAGS.debug:
+                                if cur_step > 1:
+                                    return
                     else:
                         early_stop += 1
                         if early_stop >= FLAGS.tol:
@@ -370,7 +372,7 @@ class DistributeTrain(TrainTemplate):
             print(f'Epoch {epoch + 1} Loss {self.train_loss_metric.result().numpy():.6f}')
             print(f'Time cost for 1 epoch {time.time() - start:.2f} sec\n')
 
-    def inference(self, test_data, FLAGS, ckpt_dir):
+    def inference(self, test_data, FLAGS, ckpt_dir, test_refs):
         print("Finish training! Starting to test ...")
         # restore model
         ckpt = tf.train.Checkpoint(encoder=self.encoder,
@@ -380,22 +382,23 @@ class DistributeTrain(TrainTemplate):
         ckpt_manager = tf.train.CheckpointManager(ckpt, ckpt_dir,
                                                   max_to_keep=3)
         status = ckpt.restore(ckpt_manager.latest_checkpoint)
-        # status.assert_consumed()
+        status.assert_consumed()
 
         # test
         test_loss = 0.
         self.test_loss_metric.reset_states()
-        test_hypos, test_refs = [], []
-        for (test_batch, (test_img, test_ref)) in enumerate(test_data):
+        test_hypos = {}
+        for (test_batch, (test_imgid, test_img, test_ref)) in enumerate(test_data):
             test_hypo, batch_loss = self.distributed_test_step(test_img, test_ref)
             if self.strategy.num_replicas_in_sync > 1:
                 test_loss += sum(per_replica_loss.numpy() for per_replica_loss in batch_loss.values)
-                test_hypos.extend(list(test_hypo.values))
-                test_refs.extend([ref[:, 1:] for ref in test_ref.values])
+                for i in range(self.strategy.num_replicas_in_sync):
+                    imgid = test_imgid.values[i]
+                    hypo = test_hypo.values[i]
+                    test_hypos.update({k: v for k, v in zip(imgid.numpy().tolist(), hypo.tolist())})
             else:
                 test_loss += batch_loss
-                test_hypos.append(test_hypo)
-                test_refs.append(test_ref[:, 1:])
+                test_hypos.update({k: v for k, v in zip(test_imgid.numpy().tolist(), test_hypo.tolist())})
 
         avg_test_loss = test_loss / ((test_batch + 1) * self.strategy.num_replicas_in_sync)
         m_test_loss = self.test_loss_metric.result().numpy()
