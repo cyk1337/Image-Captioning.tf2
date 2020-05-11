@@ -35,7 +35,7 @@ def img_cap_flags():
     flags.DEFINE_boolean("reset_cache", False, "Delete processed file if exists")
     flags.DEFINE_boolean('enable_function', True, 'Enable Function?')
 
-    flags.DEFINE_boolean("debug", True, "DEBUG")
+    flags.DEFINE_boolean("debug", False, "DEBUG")
 
     # devices
     flags.DEFINE_string("CUDA_VISIBLE_DEVICES", '2,3', 'specified gpu num for training')

@@ -37,6 +37,8 @@ def img_cap_flags():
 
     flags.DEFINE_boolean("debug", False, "DEBUG")
 
+    # devices
+    flags.DEFINE_string("CUDA_VISIBLE_DEVICES", '1', 'specified gpu num for training')
     # model settings
     flags.DEFINE_enum('model_name', 'ShowAttendTell', ['ShowAttendTell'], 'Model name')
     flags.DEFINE_string('cnn_type', 'inception_v3', 'CNN encoder type: ')
@@ -66,9 +68,6 @@ def img_cap_flags():
     flags.DEFINE_integer("num_epochs", 100, "Epochs to train")
     flags.DEFINE_integer("tol", 30, "Tolerance for early stopping")
     flags.DEFINE_integer("val_every", 200, "Every K epoch to evaluate once on eval set")
-
-    # devices
-    flags.DEFINE_string("CUDA_VISIBLE_DEVICES", '3', 'specified gpu num for training')
 
     # model storage
     flags.DEFINE_boolean("save_models", True, "Whether to save models")
