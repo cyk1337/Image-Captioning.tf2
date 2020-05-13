@@ -47,6 +47,9 @@ def img_cap_flags():
     flags.DEFINE_boolean("use_pretrained_embed", False, "Whether to use pretrained embeddings")
     flags.DEFINE_string('embed_path', None, 'Pre-trained embedding path')
     flags.DEFINE_enum('optim_name', 'Adam', ['Adam', 'RMSProp', 'SGD'], 'Optimizer')
+    # decoding
+    flags.DEFINE_enum('decoding', 'greedy', ['beam_search', 'greedy', 'sample'], 'Optimizer')
+    flags.DEFINE_integer('beam_size', 3, 'beam size')
 
     flags.DEFINE_boolean("do_train", True, "Train mode")
     flags.DEFINE_boolean("do_test", True, "Inference on the test set")
@@ -145,10 +148,10 @@ def create_model(model_name, model_config, optimizer, strategy):
     return model
 
 
-def create_model_config(model_name, vocab_size, vocab_dict, idx_word, num_epochs, model_repr):
+def create_model_config(model_name, vocab_size, vocab_dict, idx_word, num_epochs, model_repr, decoding, beam_size):
     base_params = (
         vocab_size, FLAGS.embed_dim, FLAGS.h_dim, FLAGS.max_seq_len, vocab_dict, idx_word, num_epochs,
-        FLAGS.use_pretrained_embed, FLAGS.embed_path, model_repr,
+        FLAGS.use_pretrained_embed, FLAGS.embed_path, model_repr, decoding, beam_size
     )
     config_collections = {
         'ShowAttendTell': (ShowAttendTellConfig, base_params),
@@ -244,10 +247,10 @@ def main(argv):
             save_dir = os.path.join(output_dir, model_repr, datetime.now().strftime("%Y-%m-%d-%H-%M-%S"))
         os.makedirs(save_dir, exist_ok=True)
 
-        # load model_config
-        # ===============================
-        model_config = create_model_config(FLAGS.model_name, vocab_size, vocab_dict, idx_word, FLAGS.num_epochs,
-                                           model_repr)
+    # load model_config
+    # ===============================
+    model_config = create_model_config(FLAGS.model_name, vocab_size, vocab_dict, idx_word, FLAGS.num_epochs, model_repr,
+                                       FLAGS.decoding, FLAGS.beam_size)
 
         # optimizer
         # ==============================

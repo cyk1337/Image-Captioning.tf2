@@ -46,6 +46,9 @@ def img_cap_flags():
     flags.DEFINE_boolean("use_pretrained_embed", False, "Whether to use pretrained embeddings")
     flags.DEFINE_string('embed_path', None, 'Pre-trained embedding path')
     flags.DEFINE_enum('optim_name', 'Adam', ['Adam', 'RMSProp', 'SGD'], 'Optimizer')
+    # decoding
+    flags.DEFINE_enum('decoding', 'greedy', ['beam_search', 'greedy', 'sample'], 'Optimizer')
+    flags.DEFINE_integer('beam_size', 3, 'beam size')
 
     flags.DEFINE_boolean("do_train", True, "Train mode")
     flags.DEFINE_boolean("do_test", True, "Inference on the test set")
@@ -54,9 +57,9 @@ def img_cap_flags():
 
     # hyper-params
     flags.DEFINE_integer("max_seq_len", 30, "Max sequence length for each inputs")
-    flags.DEFINE_integer("train_bsz", 512, "Batch size in the train mode")
-    flags.DEFINE_integer("val_bsz", 500, "Batch size in the eval mode")
-    flags.DEFINE_integer("test_bsz", 500, "Batch size in the test mode")
+    flags.DEFINE_integer("train_bsz", 50, "Batch size in the train mode")
+    flags.DEFINE_integer("val_bsz", 50, "Batch size in the eval mode")
+    flags.DEFINE_integer("test_bsz", 50, "Batch size in the test mode")
     flags.DEFINE_integer("max_num_words", None, "Maximum vocabulary size")
     flags.DEFINE_integer("embed_dim", 300, "Embedding dim")
     flags.DEFINE_integer("h_dim", 512, "Attn_dim")
@@ -144,10 +147,10 @@ def create_model(model_name, model_config, optimizer):
     return model
 
 
-def create_model_config(model_name, vocab_size, vocab_dict, idx_word, num_epochs, model_repr):
+def create_model_config(model_name, vocab_size, vocab_dict, idx_word, num_epochs, model_repr, decoding, beam_size):
     base_params = (
         vocab_size, FLAGS.embed_dim, FLAGS.h_dim, FLAGS.max_seq_len, vocab_dict, idx_word, num_epochs,
-        FLAGS.use_pretrained_embed, FLAGS.embed_path, model_repr,
+        FLAGS.use_pretrained_embed, FLAGS.embed_path, model_repr, decoding, beam_size
     )
     config_collections = {
         'ShowAttendTell': (ShowAttendTellConfig, base_params),
@@ -232,7 +235,8 @@ def main(argv):
 
     # load model_config
     # ===============================
-    model_config = create_model_config(FLAGS.model_name, vocab_size, vocab_dict, idx_word, FLAGS.num_epochs, model_repr)
+    model_config = create_model_config(FLAGS.model_name, vocab_size, vocab_dict, idx_word, FLAGS.num_epochs, model_repr,
+                                       FLAGS.decoding, FLAGS.beam_size)
 
     # optimizer
     # ==============================

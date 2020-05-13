@@ -37,6 +37,8 @@ class TrainTemplate(object):
         self.num_epochs = model_config.num_epochs
         self.vocab_dict = model_config.vocab_dict
         self.idx_word = model_config.idx_word
+        self.decoding = model_config.decoding
+        self.beam_size = model_config.beam_size
         self.train_loss_metric = tf.keras.metrics.Mean(name='train_loss')
         self.test_loss_metric = tf.keras.metrics.Mean(name='test_loss')
         self.scorer = measure_score
@@ -75,17 +77,47 @@ class TrainTemplate(object):
 
     def test_step(self, x, y):
         loss = 0.
+        # hypos = np.zeros([x.shape[0], y.shape[1]-1])
         hypos = []
+
+        def beam_search(sequences, logits, beam_size):
+            all_candidates = list()
+            # expand current candidate
+            for i in range(len(sequences)):
+                seq, score = sequences[i]
+                for j in range(len(logits)):
+                    candidate = [seq + [j], score + logits[j]]
+                    all_candidates.append(candidate)
+            ordered = sorted(all_candidates, key=lambda tup: tup[1], reverse=True)
+            sequences = ordered[:beam_size]
+            return sequences
+
         hidden = self.decoder.reset_state(batch_size=y.shape[0])
         with tf.GradientTape():
+            if self.decoding == 'beam_search':
+                beam_starts = [[[[self.vocab_dict[START]], 0.]] for _ in range(y.shape[0])]
             features = self.encoder(x)
             dec_input = tf.expand_dims([self.vocab_dict[START]] * y.shape[0], 1)
             for t in range(1, y.shape[1]):
                 pred, hidden, _ = self.decoder(dec_input, features, hidden)
                 loss += self.loss_function(y[:, t], pred)
-                pred_ids = tf.argmax(pred, axis=1)  # greedy
-                hypos.append(pred_ids.numpy())
-                dec_input = tf.expand_dims(pred_ids, 1)
+                if self.decoding == 'greedy':
+                    pred_ids = tf.argmax(pred, axis=1)  # greedy
+                    hypos.append(pred_ids.numpy())
+                    dec_input = tf.expand_dims(pred_ids, 1)
+                elif self.decoding == 'beam_search':
+                    # beam search
+                    batch_logits = tf.nn.log_softmax(pred, axis=-1).numpy()
+                    # handle batch
+                    for i in range(len(beam_starts)):
+                        beam_starts[i] = beam_search(beam_starts[i], batch_logits[i], self.beam_size)
+                    dec_input = None
+                    raise NotImplementedError  # todo: the next step prediction for each beam
+
+        if self.decoding == 'beam_search':
+            for batch in beam_starts:
+                best = sorted(batch, key=lambda item: item[1])[0]
+                hypos.append(best)
         batch_loss = loss / int(y.shape[1])
         self.test_loss_metric(batch_loss)
         hypos = np.vstack(hypos).transpose()
@@ -166,7 +198,7 @@ class TrainTemplate(object):
                                 f"best_val_loss= {best_val_loss}, "
                                 f"best_scores={best_scores} \x1b[0m")
                             # save log
-                            save_log(os.path.dirname(ckpt_dir) + '/test_results.txt',
+                            save_log(os.path.dirname(ckpt_dir) + '/val_results.txt',
                                      {'model': self.model_config.model_repr,
                                       'best_step': best_step,
                                       'best_val_loss': best_val_loss,
@@ -362,7 +394,7 @@ class DistributeTrain(TrainTemplate):
                                 f"best_val_loss= {best_val_loss:8.4f}, "
                                 f"best_scores={best_scores} \x1b[0m")
                             # save log
-                            save_log(os.path.dirname(ckpt_dir) + '/test_results.txt',
+                            save_log(os.path.dirname(ckpt_dir) + '/val_results.txt',
                                      {'model': self.model_config.model_repr,
                                       'best_step': best_step,
                                       'best_val_loss': best_val_loss,

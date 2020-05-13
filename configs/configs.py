@@ -23,7 +23,7 @@ _____.___._______________  __.____ __________    _________   ___ ___    _____  .
 
 class BaseConfig(object):
     def __init__(self, vocab_size, embed_dim, h_dim, maxlen, vocab_dict, idx_word, num_epochs, use_pretrained_embed,
-                 embed_path, model_repr):
+                 embed_path, model_repr, decoding, beam_size):
         self.vocab_size = vocab_size
         self.embed_dim = embed_dim
         self.maxlen = maxlen
@@ -33,6 +33,8 @@ class BaseConfig(object):
         self.num_epochs = num_epochs
         self.model_repr = model_repr
         self.embed_path = embed_path
+        self.decoding = decoding
+        self.beam_size = beam_size
         self.use_pretrained_embed = use_pretrained_embed
         if use_pretrained_embed and embed_path is None:
             raise ValueError("Not given pretrained embedding file path!")
@@ -43,6 +45,6 @@ class BaseConfig(object):
 
 class ShowAttendTellConfig(BaseConfig):
     def __init__(self, vocab_size, embed_dim, h_dim, maxlen, vocab_dict, idx_word, num_epochs, use_pretrained_embed,
-                 embed_path, model_repr):
+                 embed_path, model_repr, decoding, beam_size):
         super().__init__(vocab_size, embed_dim, h_dim, maxlen, vocab_dict, idx_word, num_epochs, use_pretrained_embed,
-                         embed_path, model_repr)
+                         embed_path, model_repr, decoding, beam_size)
